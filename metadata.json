@@ -1,0 +1,5 @@
+{
+  "name": "SpeakUp AI",
+  "description": "Production-grade English speaking practice app powered by Gemini Live API for real-time voice-to-voice coaching.",
+  "requestFramePermissions": ["microphone"]
+}
