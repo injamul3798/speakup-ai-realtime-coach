@@ -1,16 +1,178 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+import hashlib
 import logging
+import secrets
 from threading import Lock
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from . import models, schemas
 from .assessment import assess_transcript, generate_session_id, save_transcript_file
+from .config import settings
 from .database import SessionLocal
 
 logger = logging.getLogger(__name__)
 _interaction_cache: dict[str, list[dict]] = {}
 _interaction_cache_lock = Lock()
+
+
+def _hash_password(password: str, salt: str) -> str:
+    return hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
+
+
+def _new_auth_token() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def create_user_account(db: Session, payload: schemas.SignUpRequest) -> models.User:
+    normalized_email = payload.email.strip().lower()
+    existing = db.query(models.User).filter(models.User.email == normalized_email).first()
+    if existing:
+        raise ValueError("Email already registered")
+    if payload.password != payload.confirmPassword:
+        raise ValueError("Password and confirm password do not match")
+    if len(payload.password) < 6:
+        raise ValueError("Password must be at least 6 characters")
+
+    salt = secrets.token_hex(16)
+    user = models.User(
+        client_id=str(uuid4()),
+        full_name=payload.fullName.strip(),
+        email=normalized_email,
+        role="user",
+        password_salt=salt,
+        password_hash=_hash_password(payload.password, salt),
+        auth_token=_new_auth_token(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def create_admin_account(db: Session, full_name: str, email: str, password: str) -> models.User:
+    normalized_email = email.strip().lower()
+    existing = db.query(models.User).filter(models.User.email == normalized_email).first()
+    if existing:
+        raise ValueError("Email already registered")
+    if len(password) < 6:
+        raise ValueError("Password must be at least 6 characters")
+
+    salt = secrets.token_hex(16)
+    user = models.User(
+        client_id=str(uuid4()),
+        full_name=full_name.strip(),
+        email=normalized_email,
+        role="admin",
+        password_salt=salt,
+        password_hash=_hash_password(password, salt),
+        auth_token=_new_auth_token(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def sign_in_user(db: Session, payload: schemas.SignInRequest) -> models.User:
+    normalized_email = payload.email.strip().lower()
+    user = db.query(models.User).filter(models.User.email == normalized_email).first()
+    if not user or not user.password_hash or not user.password_salt:
+        raise ValueError("Invalid credentials")
+
+    computed = _hash_password(payload.password, user.password_salt)
+    if computed != user.password_hash:
+        raise ValueError("Invalid credentials")
+
+    user.auth_token = _new_auth_token()
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def get_user_by_token(db: Session, token: str) -> models.User | None:
+    return db.query(models.User).filter(models.User.auth_token == token).first()
+
+
+def assert_daily_practice_limit(db: Session, user: models.User, client_ip: str | None) -> None:
+    if user.role == "admin":
+        return
+
+    user_count = (
+        db.query(models.PracticeSession)
+        .filter(
+            models.PracticeSession.user_id == user.id,
+        )
+        .count()
+    )
+    if user_count >= settings.user_lifetime_session_limit:
+        raise ValueError(
+            f"Practice limit reached: users can complete only {settings.user_lifetime_session_limit} sessions total"
+        )
+
+    if client_ip:
+        ip_count = (
+            db.query(models.PracticeSession)
+            .filter(
+                models.PracticeSession.client_ip == client_ip,
+            )
+            .count()
+        )
+        if ip_count >= settings.user_lifetime_session_limit:
+            raise ValueError(
+                f"IP limit reached: only {settings.user_lifetime_session_limit} sessions allowed from this IP"
+            )
+
+
+def get_practice_count(db: Session, user: models.User) -> int:
+    return db.query(models.PracticeSession).filter(models.PracticeSession.user_id == user.id).count()
+
+
+def get_practice_limit_for_user(user: models.User) -> int | None:
+    return None if user.role == "admin" else settings.user_lifetime_session_limit
+
+
+def can_user_practice(db: Session, user: models.User) -> bool:
+    limit = get_practice_limit_for_user(user)
+    if limit is None:
+        return True
+    return get_practice_count(db, user) < limit
+
+
+def _auth_response(db: Session, user: models.User) -> schemas.AuthResponse:
+    practice_limit = get_practice_limit_for_user(user)
+    practice_count = get_practice_count(db, user)
+    return schemas.AuthResponse(
+        token=user.auth_token or "",
+        clientId=user.client_id,
+        email=user.email or "",
+        fullName=user.full_name or "",
+        role=user.role,
+        practiceCount=practice_count,
+        practiceLimit=practice_limit,
+        canPractice=(practice_limit is None or practice_count < practice_limit),
+    )
+
+
+def auth_response(db: Session, user: models.User) -> schemas.AuthResponse:
+    return _auth_response(db, user)
+
+
+def me_response(db: Session, user: models.User) -> schemas.MeResponse:
+    practice_limit = get_practice_limit_for_user(user)
+    practice_count = get_practice_count(db, user)
+    return schemas.MeResponse(
+        clientId=user.client_id,
+        email=user.email or "",
+        fullName=user.full_name or "",
+        role=user.role,
+        level=user.level,
+        xp=user.xp,
+        practiceCount=practice_count,
+        practiceLimit=practice_limit,
+        canPractice=(practice_limit is None or practice_count < practice_limit),
+    )
 
 
 def _sanitize_transcript_line(text: str) -> str:
@@ -91,13 +253,20 @@ def get_or_create_user(db: Session, client_id: str) -> models.User:
 
 
 def build_bootstrap_response(user: models.User) -> schemas.BootstrapResponse:
+    practice_count = len(user.sessions)
+    practice_limit = get_practice_limit_for_user(user)
     return schemas.BootstrapResponse(
+        role=user.role,
+        fullName=user.full_name or "",
         level=user.level,
         xp=user.xp,
         streak=schemas.StreakPayload(
             count=user.streak_count,
             lastDate=user.streak_last_date.isoformat() if user.streak_last_date else "",
         ),
+        practiceCount=practice_count,
+        practiceLimit=practice_limit,
+        canPractice=(practice_limit is None or practice_count < practice_limit),
         customSections=[
             schemas.SectionRead(
                 id=section.external_id,
@@ -148,7 +317,7 @@ def log_interaction(db: Session, user: models.User, payload: schemas.Interaction
 
 
 def queue_session_completion(
-    db: Session, user: models.User, payload: schemas.SessionComplete
+    db: Session, user: models.User, payload: schemas.SessionComplete, client_ip: str
 ) -> schemas.SessionSummaryResponse:
     session_id = generate_session_id()
     resolved_transcript = _resolve_transcript_text(user, payload)
@@ -175,6 +344,7 @@ def queue_session_completion(
         xp_awarded=payload.xpAwarded,
         transcript_excerpt=resolved_transcript[:1000],
         transcript_file_path=transcript_file_path,
+        client_ip=client_ip or "",
         stats={
             **payload.stats,
             "conversation_turns": turns,

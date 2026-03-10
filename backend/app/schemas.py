@@ -28,6 +28,41 @@ class ProfileUpdate(BaseModel):
     level: str | None = None
 
 
+class SignUpRequest(BaseModel):
+    fullName: str
+    email: str
+    password: str
+    confirmPassword: str
+
+
+class SignInRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    token: str
+    clientId: str
+    email: str
+    fullName: str
+    role: str
+    practiceCount: int
+    practiceLimit: int | None
+    canPractice: bool
+
+
+class MeResponse(BaseModel):
+    clientId: str
+    email: str
+    fullName: str
+    role: str
+    level: str
+    xp: int
+    practiceCount: int
+    practiceLimit: int | None
+    canPractice: bool
+
+
 class InteractionCreate(BaseModel):
     sectionName: str
     heard: str = ""
@@ -56,9 +91,14 @@ class SessionComplete(BaseModel):
 
 
 class BootstrapResponse(BaseModel):
+    role: str = "user"
+    fullName: str = ""
     level: str
     xp: int
     streak: StreakPayload
+    practiceCount: int = 0
+    practiceLimit: int | None = 2
+    canPractice: bool = True
     customSections: list[SectionRead]
 
 

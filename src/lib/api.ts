@@ -1,18 +1,23 @@
 import type {
+  AuthResponse,
   BootstrapResponse,
   GeminiResponsePayload,
+  MeResponse,
   PracticeSection,
   SessionTrendsResponse,
   SessionStatusResponse,
   SessionSummaryResponse,
 } from '../types';
+import { getAuthToken } from './client';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthToken();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers || {}),
     },
     ...init,
@@ -24,6 +29,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+export function signUp(payload: {
+  fullName: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+}) {
+  return request<AuthResponse>('/api/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function signIn(payload: { email: string; password: string }) {
+  return request<AuthResponse>('/api/auth/signin', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchMe() {
+  return request<MeResponse>('/api/auth/me');
 }
 
 export function fetchBootstrap(clientId: string) {

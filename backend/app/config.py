@@ -16,6 +16,7 @@ class Settings:
     )
     gemini_api_key = os.getenv("GEMINI_API_KEY", "")
     gemini_assessment_model = os.getenv("GEMINI_ASSESSMENT_MODEL", "gemini-3.1-pro-preview")
+    user_lifetime_session_limit = int(os.getenv("USER_LIFETIME_SESSION_LIMIT", "2"))
     transcript_dir = os.getenv(
         "TRANSCRIPT_DIR",
         str(Path(__file__).resolve().parents[1] / "transcript"),

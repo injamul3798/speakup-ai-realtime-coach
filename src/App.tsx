@@ -6,7 +6,6 @@ import {
   Clock3,
   Flame,
   HelpCircle,
-  Key,
   Languages,
   Lightbulb,
   Menu,
@@ -35,12 +34,15 @@ import {
   completeSession,
   createSection,
   fetchBootstrap,
+  fetchMe,
   fetchSessionStatus,
   fetchSessionTrends,
   logInteraction,
+  signIn,
+  signUp,
   updateProfile,
 } from './lib/api';
-import { getClientId } from './lib/client';
+import { clearAuth, getAuthToken, setAuthToken, setClientId } from './lib/client';
 import { cn } from './lib/utils';
 import type {
   GeminiResponsePayload,
@@ -199,9 +201,23 @@ function formatAreaLabel(value: string) {
 
 export default function App() {
   const clientIdRef = useRef('');
-  if (!clientIdRef.current) {
-    clientIdRef.current = getClientId();
-  }
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [authForm, setAuthForm] = useState({
+    fullName: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+  });
+  const [authUser, setAuthUser] = useState({
+    fullName: '',
+    email: '',
+    role: 'user' as 'user' | 'admin',
+  });
+  const [practiceCount, setPracticeCount] = useState(0);
+  const [practiceLimit, setPracticeLimit] = useState<number | null>(2);
+  const [canPractice, setCanPractice] = useState(true);
 
   const [level, setLevel] = useState('B1');
   const [xp, setXp] = useState(0);
@@ -216,6 +232,7 @@ export default function App() {
   const [isBootstrapLoading, setIsBootstrapLoading] = useState(true);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [apiError, setApiError] = useState('');
+  const [sessionHint, setSessionHint] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [newSection, setNewSection] = useState({ name: '', emoji: '💬', description: '' });
   const [wordBank, setWordBank] = useState<Set<string>>(new Set());
@@ -260,6 +277,50 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
+    async function loadAuth() {
+      const token = getAuthToken();
+      if (!token) {
+        if (!cancelled) {
+          setIsAuthReady(false);
+          setIsBootstrapLoading(false);
+        }
+        return;
+      }
+
+      try {
+        const me = await fetchMe();
+        if (cancelled) {
+          return;
+        }
+        clientIdRef.current = me.clientId;
+        setClientId(me.clientId);
+        setAuthUser({ fullName: me.fullName, email: me.email, role: me.role });
+        setPracticeCount(me.practiceCount);
+        setPracticeLimit(me.practiceLimit);
+        setCanPractice(me.canPractice);
+        setIsAuthReady(true);
+      } catch {
+        clearAuth();
+        if (!cancelled) {
+          setIsAuthReady(false);
+        }
+      }
+    }
+
+    void loadAuth();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthReady || !clientIdRef.current) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsBootstrapLoading(true);
+
     async function loadBootstrap() {
       try {
         const bootstrap = await fetchBootstrap(clientIdRef.current);
@@ -270,6 +331,9 @@ export default function App() {
         setXp(bootstrap.xp);
         setStreak(bootstrap.streak);
         setCustomSections(bootstrap.customSections);
+        setPracticeCount(bootstrap.practiceCount);
+        setPracticeLimit(bootstrap.practiceLimit);
+        setCanPractice(bootstrap.canPractice);
         const trends = await fetchSessionTrends(clientIdRef.current);
         if (!cancelled) {
           setSessionTrends(trends);
@@ -289,7 +353,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAuthReady]);
 
   useEffect(() => {
     if (!sessionStartedAtRef.current) {
@@ -440,14 +504,65 @@ export default function App() {
     }
   };
 
+  const handleAuthSubmit = async () => {
+    setApiError('');
+    setIsAuthLoading(true);
+    try {
+      const payload =
+        authMode === 'signup'
+          ? await signUp({
+              fullName: authForm.fullName,
+              email: authForm.email,
+              password: authForm.password,
+              confirmPassword: authForm.confirmPassword,
+            })
+          : await signIn({
+              email: authForm.email,
+              password: authForm.password,
+            });
+
+      setAuthToken(payload.token);
+      setClientId(payload.clientId);
+      clientIdRef.current = payload.clientId;
+      setAuthUser({ fullName: payload.fullName, email: payload.email, role: payload.role });
+      setPracticeCount(payload.practiceCount);
+      setPracticeLimit(payload.practiceLimit);
+      setCanPractice(payload.canPractice);
+      setIsAuthReady(true);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Authentication failed.');
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    clearAuth();
+    clientIdRef.current = '';
+    setIsAuthReady(false);
+    setAuthUser({ fullName: '', email: '', role: 'user' });
+    setPracticeCount(0);
+    setPracticeLimit(2);
+    setCanPractice(true);
+    setCustomSections([]);
+    setSessionTrends(EMPTY_TRENDS);
+    setAssessment(EMPTY_ASSESSMENT);
+  };
+
   const toggleRecording = () => {
+    if (!canPractice) {
+      setApiError('Practice limit reached. Upgrade to admin to continue unlimited sessions.');
+      return;
+    }
     if (isRecording) {
       stopRecording();
       endTurn();
+      setSessionHint('Turn ended. Click "Finish & Save Session" to store this interview in the database.');
       return;
     }
 
     setInputTranscript('');
+    setSessionHint('');
     startSession();
     startRecording(sendAudioChunk);
   };
@@ -564,6 +679,10 @@ export default function App() {
       setIsReportModalOpen(true);
       const trends = await fetchSessionTrends(clientIdRef.current);
       setSessionTrends(trends);
+      const bootstrap = await fetchBootstrap(clientIdRef.current);
+      setPracticeCount(bootstrap.practiceCount);
+      setPracticeLimit(bootstrap.practiceLimit);
+      setCanPractice(bootstrap.canPractice);
       confetti({
         particleCount: 100,
         spread: 70,
@@ -574,6 +693,7 @@ export default function App() {
       setApiError(error instanceof Error ? error.message : 'Failed to save session summary.');
     } finally {
       sessionStartedAtRef.current = null;
+      setSessionHint('');
       setSecondsRemaining(sessionMinutes * 60);
     }
   };
@@ -623,13 +743,70 @@ export default function App() {
     };
   }, [activeSessionId, isEvaluatingSession]);
 
-  const handleSetApiKey = async () => {
-    if ((window as any).aistudio?.openSelectKey) {
-      await (window as any).aistudio.openSelectKey();
-      return;
-    }
-    alert('API key selection is only available in the AI Studio environment.');
-  };
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 sm:p-8">
+        <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-card/70 p-6 sm:p-8 shadow-2xl">
+          <div className="mb-6 text-center">
+            <div className="text-2xl font-bold font-display">SpeakUp AI</div>
+            <div className="mt-2 text-sm text-white/50">
+              Sign in to access live practice and dashboard analytics.
+            </div>
+          </div>
+          {apiError && (
+            <div className="mb-4 rounded-2xl border border-error/20 bg-error/10 p-3 text-sm text-error">{apiError}</div>
+          )}
+          {authMode === 'signup' && (
+            <input
+              type="text"
+              placeholder="Full name"
+              value={authForm.fullName}
+              onChange={(event) => setAuthForm({ ...authForm, fullName: event.target.value })}
+              className="mb-3 w-full rounded-2xl border border-white/10 bg-white/5 p-3 focus:border-accent focus:outline-none"
+            />
+          )}
+          <input
+            type="email"
+            placeholder="Email"
+            value={authForm.email}
+            onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })}
+            className="mb-3 w-full rounded-2xl border border-white/10 bg-white/5 p-3 focus:border-accent focus:outline-none"
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={authForm.password}
+            onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })}
+            className="mb-3 w-full rounded-2xl border border-white/10 bg-white/5 p-3 focus:border-accent focus:outline-none"
+          />
+          {authMode === 'signup' && (
+            <>
+              <input
+                type="password"
+                placeholder="Confirm password"
+                value={authForm.confirmPassword}
+                onChange={(event) => setAuthForm({ ...authForm, confirmPassword: event.target.value })}
+                className="mb-3 w-full rounded-2xl border border-white/10 bg-white/5 p-3 focus:border-accent focus:outline-none"
+              />
+            </>
+          )}
+          <button
+            onClick={() => void handleAuthSubmit()}
+            disabled={isAuthLoading}
+            className="w-full rounded-2xl bg-accent py-3 font-semibold transition hover:bg-accent/80 disabled:opacity-50"
+          >
+            {isAuthLoading ? 'Please wait...' : authMode === 'signup' ? 'Create account' : 'Sign in'}
+          </button>
+          <button
+            onClick={() => setAuthMode(authMode === 'signup' ? 'signin' : 'signup')}
+            className="mt-3 w-full text-sm text-white/60 transition hover:text-white"
+          >
+            {authMode === 'signup' ? 'Already have an account? Sign in' : 'New here? Create account'}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const sessionProgress = 100 - Math.round((secondsRemaining / (sessionMinutes * 60)) * 100);
   const dashboardScores = getDashboardScores(lastResponse?.scores, assessment.scores, sessionTrends.recentSessions);
@@ -673,7 +850,16 @@ export default function App() {
           <div className="w-10 h-10 bg-accent rounded-xl flex items-center justify-center shadow-lg shadow-accent/20">
             <Speaker className="text-white" size={24} />
           </div>
-          <h1 className="text-xl font-bold font-display tracking-tight">SpeakUp AI</h1>
+          <div className="flex-1">
+            <h1 className="text-xl font-bold font-display tracking-tight">SpeakUp AI</h1>
+            <div className="text-xs text-white/50">{authUser.fullName} · {authUser.role}</div>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70 transition hover:bg-white/10 hover:text-white"
+          >
+            Logout
+          </button>
         </div>
 
         <div className="flex-1 space-y-5 xl:space-y-6 xl:overflow-y-auto xl:pr-2">
@@ -799,14 +985,6 @@ export default function App() {
           >
             End Session
           </button>
-
-          <button
-            onClick={() => void handleSetApiKey()}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-accent/20 bg-accent/10 py-3 text-xs font-bold text-accent transition-all hover:bg-accent/20"
-          >
-            <Key size={14} />
-            Set Custom API Key
-          </button>
         </div>
       </aside>
 
@@ -832,7 +1010,8 @@ export default function App() {
                       Level {level}
                     </div>
                     <div className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/55">
-                      {sessionTrends.sessionsCompleted} tracked sessions
+                      {practiceCount} used
+                      {practiceLimit === null ? ' · Unlimited' : ` / ${practiceLimit} total`}
                     </div>
                     <div className="rounded-full border border-accent/20 bg-accent/10 px-3 py-2 text-xs font-semibold text-accent">
                       Avg score {sessionTrends.averageScore}
@@ -872,34 +1051,48 @@ export default function App() {
                 <div className="grid gap-3 sm:grid-cols-3 md:grid-cols-1">
                   <button
                     onClick={toggleRecording}
-                    disabled={!isConnected || isBootstrapLoading}
+                    disabled={!isConnected || isBootstrapLoading || !canPractice}
                     className={cn(
                       'flex min-h-16 items-center justify-center rounded-3xl border px-5 py-4 text-sm font-bold transition-all',
                       isRecording
                         ? 'border-error/30 bg-error text-white shadow-lg shadow-error/20'
                         : 'border-accent/20 bg-accent text-white shadow-lg shadow-accent/20',
-                      (!isConnected || isBootstrapLoading) && 'cursor-not-allowed opacity-50',
+                      (!isConnected || isBootstrapLoading || !canPractice) && 'cursor-not-allowed opacity-50',
                     )}
                   >
                     <div className="flex items-center gap-3">
                       {isRecording ? <Square size={20} /> : <Mic size={20} />}
-                      <span>{isRecording ? 'End Turn' : 'Start Session'}</span>
+                      <span>
+                        {isRecording
+                          ? 'End Turn'
+                          : canPractice
+                            ? 'Start Speaking'
+                            : 'Practice Limit Reached'}
+                      </span>
                     </div>
                   </button>
                   <button
                     onClick={() => void handleEndSession()}
                     className="flex min-h-16 items-center justify-center rounded-3xl border border-white/10 bg-white/5 px-5 py-4 text-sm font-bold transition-all hover:bg-white/10"
                   >
-                    End Session
-                  </button>
-                  <button
-                    onClick={() => void handleSetApiKey()}
-                    className="flex min-h-16 items-center justify-center gap-2 rounded-3xl border border-accent/20 bg-accent/10 px-5 py-4 text-sm font-bold text-accent transition-all hover:bg-accent/20"
-                  >
-                    <Key size={16} />
-                    API Key
+                    Finish & Save Session
                   </button>
                 </div>
+                {!canPractice && authUser.role !== 'admin' && (
+                  <div className="rounded-2xl border border-error/20 bg-error/10 px-4 py-3 text-xs text-error">
+                    Lifetime practice cap reached ({practiceCount}/{practiceLimit}). This account cannot start more live sessions.
+                  </div>
+                )}
+                {sessionStartedAtRef.current && (
+                  <div className="rounded-2xl border border-yellow-400/25 bg-yellow-400/10 px-4 py-3 text-xs text-yellow-200">
+                    Session is active. Your interview is saved to DB only after you click <strong>Finish &amp; Save Session</strong>.
+                  </div>
+                )}
+                {sessionHint && (
+                  <div className="rounded-2xl border border-accent/25 bg-accent/10 px-4 py-3 text-xs text-accent">
+                    {sessionHint}
+                  </div>
+                )}
               </div>
             </div>
           </div>

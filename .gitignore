@@ -40,3 +40,4 @@ backend/.env*
 
 # Runtime/generated data
 backend/transcript/*.txt
+backend/scripts/create_admin.py

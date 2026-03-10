@@ -56,10 +56,38 @@ export interface SessionAssessment {
 }
 
 export interface BootstrapResponse {
+  role: 'admin' | 'user';
+  fullName: string;
   level: string;
   xp: number;
   streak: Streak;
+  practiceCount: number;
+  practiceLimit: number | null;
+  canPractice: boolean;
   customSections: PracticeSection[];
+}
+
+export interface AuthResponse {
+  token: string;
+  clientId: string;
+  email: string;
+  fullName: string;
+  role: 'admin' | 'user';
+  practiceCount: number;
+  practiceLimit: number | null;
+  canPractice: boolean;
+}
+
+export interface MeResponse {
+  clientId: string;
+  email: string;
+  fullName: string;
+  role: 'admin' | 'user';
+  level: string;
+  xp: number;
+  practiceCount: number;
+  practiceLimit: number | null;
+  canPractice: boolean;
 }
 
 export interface SessionSummaryResponse {
@@ -73,28 +101,6 @@ export interface SessionSummaryResponse {
 
 export interface SessionStatusResponse extends SessionSummaryResponse {
   transcriptFilePath: string;
-}
-
-export interface SessionHistoryItem {
-  sessionId: string;
-  sectionName: string;
-  completedAt: string;
-  score: number;
-  status: string;
-  summary: string;
-  strengths: string[];
-  improvements: string[];
-  scores: Partial<Scores>;
-  transcriptFilePath: string;
-}
-
-export interface SessionTrendsResponse {
-  sessionsCompleted: number;
-  averageScore: number;
-  latestScoreDelta: number;
-  strongestArea: string;
-  focusArea: string;
-  recentSessions: SessionHistoryItem[];
 }
 
 export interface SessionHistoryItem {
