@@ -1,64 +1,157 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # SpeakUp AI
 
-Real-time English speaking practice app with a React frontend, Gemini Live voice coaching, and a FastAPI + MySQL backend for persistent tracking.
+SpeakUp AI is a real-time English speaking coach that lets learners practice live conversations with Gemini, saves each session, evaluates progress, and surfaces actionable feedback over time.
 
-## Architecture
+## Tagline
 
-- Frontend: Vite, React 19, TypeScript, Tailwind CSS
-- Realtime AI: Gemini Live in the browser for voice-to-voice interaction
-- Backend: FastAPI
-- Database: MySQL
+Real-time interview practice with live coaching and trackable speaking progress.
 
-The realtime conversation flow stays in the frontend. The backend is responsible for:
+## What It Does
 
-- user bootstrap and profile persistence
-- custom practice section storage
-- interaction tracking
-- session summaries, XP, and streak updates
-- transcript export to text files at session end
-- backend Gemini assessment of completed session transcripts
+- Runs live English speaking practice with Gemini native audio.
+- Stores authenticated user sessions in MySQL.
+- Saves transcript files for each completed session.
+- Evaluates completed sessions with a second Gemini model.
+- Shows coaching metrics such as grammar, fluency, pronunciation, vocabulary, strengths, and improvement priorities.
+- Supports normal users with a lifetime practice cap and admin users with unlimited access.
 
-## Frontend setup
+## Architecture Diagram
 
-1. Install frontend dependencies:
-   `npm install`
-2. Create `.env.local` from `.env.example`
-3. Set:
-   `GEMINI_API_KEY=your_key`
-4. Optionally set:
-   `VITE_API_BASE_URL=http://localhost:8000`
-5. Run the frontend:
-   `npm run dev`
+```text
+                        +----------------------------------+
+                        |          User Browser            |
+                        |   React + Vite + Tailwind UI     |
+                        +----------------+-----------------+
+                                         |
+                                         | HTTPS / HTTP
+                                         v
+                        +----------------------------------+
+                        |   Frontend App / Nginx Static    |
+                        |   Served on Google Compute VM    |
+                        +----------------+-----------------+
+                                         |
+                                         | /api
+                                         v
+                        +----------------------------------+
+                        |        FastAPI Backend           |
+                        |  Auth, session tracking, APIs    |
+                        +--------+---------------+---------+
+                                 |               |
+                                 |               |
+                                 v               v
+                 +--------------------------+   +---------------------------+
+                 |        MySQL DB          |   | Transcript File Storage   |
+                 | users, sessions, trends  |   | backend/transcript/*.txt  |
+                 +--------------------------+   +---------------------------+
+                                 |
+                                 |
+                    +------------+-------------+
+                    |                          |
+                    v                          v
+     +--------------------------------+   +----------------------------------+
+     | Gemini Live API                |   | Gemini Assessment Model          |
+     | gemini-2.5-flash-native-       |   | gemini-3.1-pro-preview           |
+     | audio-preview-12-2025          |   | post-session scoring + feedback  |
+     +--------------------------------+   +----------------------------------+
+```
 
-## Backend setup
+## Technical Details
 
-1. Create a Python virtual environment inside `backend`
-2. Install dependencies:
-   `pip install -r backend/requirements.txt`
-3. Set environment variables:
-   `DATABASE_URL=mysql+pymysql://user:password@localhost:3306/speakup_ai`
-   `CORS_ORIGINS=http://localhost:3000`
-   `GEMINI_API_KEY=your_gemini_api_key`
-   `GEMINI_ASSESSMENT_MODEL=gemini-2.0-flash`
-   `TRANSCRIPT_DIR=backend/transcript`
-4. Start the API:
-   `uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000`
+### Frontend
 
-## Database tables
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- Lucide React
+- Motion
 
-The backend auto-creates these tables on startup:
+### Backend
 
-- `users`
-- `sections`
-- `interaction_logs`
-- `practice_sessions`
+- FastAPI
+- Python
+- SQLAlchemy
+- PyMySQL
 
-## Notes
+### Database
 
-- The frontend still uses Gemini directly for low-latency realtime audio.
-- Browser `client_id` is stored locally and used as the stable identity for tracking.
-- API keys should be proxied or managed server-side for a production deployment.
+- MySQL
+- Local MySQL instance running on the same Google Compute Engine VM
+
+### AI Models
+
+- Live conversation model:
+  - `gemini-2.5-flash-native-audio-preview-12-2025`
+- Post-session evaluation model:
+  - `gemini-3.1-pro-preview`
+
+### Infrastructure
+
+- Google Cloud Platform
+- Google Compute Engine
+- Nginx for static frontend hosting and API reverse proxy
+- systemd for running the backend as a persistent service
+
+## Session Lifecycle
+
+1. User signs in and starts a live speaking session.
+2. Frontend streams speech and receives live coaching responses from Gemini Live.
+3. Frontend sends tracked interaction data to FastAPI.
+4. When the session is completed, the backend:
+   - stores the session in MySQL
+   - writes the transcript to a text file
+   - starts background evaluation
+5. The evaluation model analyzes the transcript and updates the database with:
+   - summary
+   - dimension scores
+   - strengths
+   - improvements
+   - next-session recommendations
+6. The dashboard reads the saved session history and progress metrics from MySQL.
+
+## Authentication and Access Control
+
+- Users must sign up or sign in before using the app.
+- Signup creates normal users only.
+- Admin accounts are created by a script, not through public signup.
+- Normal users have a lifetime practice limit.
+- Admin users have unlimited access.
+
+## Data Stored
+
+- User account data
+- Practice sections
+- Completed session records
+- Session transcript file path
+- Evaluation payload and scores
+- Progress metrics used by the dashboard
+
+## Deployment
+
+Production deployment is designed for a single Google Compute Engine VM:
+
+- frontend built with Vite and served by Nginx
+- backend served by FastAPI/Uvicorn behind Nginx
+- MySQL hosted locally on the same VM
+- backend managed by systemd so the app continues running after terminal or SSH is closed
+
+## Environment Variables
+
+### Backend
+
+- `DATABASE_URL`
+- `CORS_ORIGINS`
+- `APP_NAME`
+- `GEMINI_API_KEY`
+- `GEMINI_ASSESSMENT_MODEL`
+- `TRANSCRIPT_DIR`
+- `USER_LIFETIME_SESSION_LIMIT`
+
+### Frontend
+
+- `VITE_API_BASE_URL`
+- `GEMINI_API_KEY`
+
+## Why This Matters
+
+Many people practice English with AI tools, but they still cannot clearly measure whether they are improving. SpeakUp AI closes that gap by combining live practice, persistent session tracking, transcript storage, and structured evaluation in one system.
