@@ -135,6 +135,23 @@ Production deployment is designed for a single Google Compute Engine VM:
 - MySQL hosted locally on the same VM
 - backend managed by systemd so the app continues running after terminal or SSH is closed
 
+### Known Issue (Microphone Permission on HTTP)
+
+Currently, when accessing the app via public IP (e.g., `http://35.202.160.174`), browsers may block microphone access because the site is not served over HTTPS.
+
+We will address this in a future version by enabling secure HTTPS deployment.
+
+#### Temporary Workaround (for testing)
+
+If microphone access is blocked, you can manually allow it in Chrome:
+
+1. Open Chrome and go to:
+chrome://flags/#unsafely-treat-insecure-origin-as-secure
+2. Add the following URL:
+
+http://35.202.160.174
+3. Relaunch Chrome.
+This will allow Chrome to treat the HTTP origin as secure and enable microphone access for testing purposes.
 ## Environment Variables
 
 ### Backend
