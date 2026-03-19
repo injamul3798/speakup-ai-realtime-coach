@@ -135,7 +135,7 @@ Production deployment is designed for a single Google Compute Engine VM:
 - MySQL hosted locally on the same VM
 - backend managed by systemd so the app continues running after terminal or SSH is closed
 
-### Known Issue (Microphone Permission on HTTP)
+## Known Issue (Microphone Permission on HTTP)
 
 Currently, when accessing the app via public IP (e.g., `http://35.202.160.174`), browsers may block microphone access because the site is not served over HTTPS.
 
